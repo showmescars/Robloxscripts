@@ -99,8 +99,8 @@ def generate_code():
         if code not in covens:
             return code
 
-def make_member(name):
-    power = random.randint(1, 100)
+def make_member(name, is_new_turn=False):
+    power = random.randint(1, 15) if is_new_turn else random.randint(1, 100)
     return {
         "name": name,
         "alive": True,
@@ -206,7 +206,112 @@ async def handle_coven(message, args):
         ),
         color=discord.Color.dark_red()
     )
-    embed.set_footer(text="coven | hunt <code> <number> | view")
+    embed.set_footer(text="coven | hunt <code> <number> | new <code> <number> | view")
+    await safe_send(message.channel, embed=embed)
+
+# --- new command ---
+
+async def handle_new(message, args):
+    if not args:
+        await safe_send(message.channel, content="Usage: `new <code> <number>`")
+        return
+
+    code = args[0].upper()
+    coven = covens.get(code)
+
+    if not coven:
+        await safe_send(message.channel, content=f"No coven found with code `{code}`.")
+        return
+    if coven['owner_id'] != message.author.id:
+        await safe_send(message.channel, content="That is not your coven.")
+        return
+    if not coven['alive']:
+        await safe_send(message.channel, content=f"**{coven['name']}** has been destroyed.")
+        return
+
+    requested = 1
+    if len(args) >= 2:
+        try:
+            requested = int(args[1])
+        except ValueError:
+            await safe_send(message.channel, content="The number must be a whole number. Example: `new XKRV 3`")
+            return
+        if requested < 1:
+            await safe_send(message.channel, content="Turn at least 1.")
+            return
+        if requested > 10:
+            await safe_send(message.channel, content="Max 10 at once.")
+            return
+
+    existing = {m['name'] for m in coven['members']}
+    available = [n for n in VAMPIRE_NAMES if n not in existing]
+
+    if not available:
+        await safe_send(message.channel, content=f"**{coven['name']}** has no more names to give. The roster is full.")
+        return
+
+    actual = min(requested, len(available))
+    turned = []
+    refused = 0
+
+    for _ in range(actual):
+        if not available:
+            break
+        if random.randint(1, 100) <= 60:
+            new_name = random.choice(available)
+            available.remove(new_name)
+            existing.add(new_name)
+            new_member = make_member(new_name, is_new_turn=True)
+            coven['members'].append(new_member)
+            turned.append(new_member)
+        else:
+            refused += 1
+
+    update_elder(coven)
+
+    if turned and refused == 0:
+        turned_lines = "\n".join(
+            f"`{m['name']}` — Power: {m['power']} ({get_power_tier(m['power'])})"
+            for m in turned
+        )
+        embed = discord.Embed(
+            title=f"{len(turned)} Turned",
+            description=(
+                f"{turned_lines}\n\n"
+                f"All {len(turned)} accepted the blood.\n"
+                f"Total alive: {len(get_alive_members(coven))}"
+            ),
+            color=discord.Color.dark_red()
+        )
+        embed.set_footer(text="They are Fledglings. Hunt to grow their power.")
+
+    elif turned and refused > 0:
+        turned_lines = "\n".join(
+            f"`{m['name']}` — Power: {m['power']} ({get_power_tier(m['power'])})"
+            for m in turned
+        )
+        embed = discord.Embed(
+            title=f"{len(turned)} Turned — {refused} Refused",
+            description=(
+                f"{turned_lines}\n\n"
+                f"{refused} rejected the offering.\n"
+                f"Total alive: {len(get_alive_members(coven))}"
+            ),
+            color=discord.Color.dark_gold()
+        )
+        embed.set_footer(text="They are Fledglings. Hunt to grow their power.")
+
+    else:
+        embed = discord.Embed(
+            title="None Accepted",
+            description=(
+                f"Offered the blood to {requested} but none accepted.\n"
+                f"Total alive: {len(get_alive_members(coven))}"
+            ),
+            color=discord.Color.dark_grey()
+        )
+        embed.set_footer(text=f"Try again with `new {code} <number>`.")
+
     await safe_send(message.channel, embed=embed)
 
 # --- hunt command ---
@@ -404,7 +509,7 @@ async def handle_view(message, args):
             description=desc,
             color=discord.Color.dark_red()
         )
-        embed.set_footer(text="coven | hunt <code> <number> | view")
+        embed.set_footer(text="coven | hunt <code> <number> | new <code> <number> | view")
         await safe_send(message.channel, embed=embed)
 
         if dead:
@@ -425,6 +530,7 @@ async def handle_view(message, args):
 COMMANDS = {
     "coven": handle_coven,
     "hunt": handle_hunt,
+    "new": handle_new,
     "view": handle_view,
 }
 
