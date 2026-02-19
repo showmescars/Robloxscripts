@@ -3,6 +3,7 @@ from discord.ext import commands
 import random
 from dotenv import load_dotenv
 import os
+import asyncio
 from keep_alive import keep_alive
 
 load_dotenv()
@@ -34,8 +35,8 @@ VAMPIRE_NAMES = [
     "Sylvix", "Erebus", "Calix", "Thessian", "Vorn", "Sariel", "Drevan",
     "Orion", "Caera", "Malthus", "Revna", "Daxon", "Solara", "Coren",
     "Vayne", "Elyra", "Phaedra", "Obsidian", "Grimoire", "Sever", "Ixon",
-    "Bellatrix", "Craven", "Morven", "Thessiane", "Valdris", "Dorian",
-    "Evander", "Lysander", "Callyx", "Noctis", "Severin", "Malachy",
+    "Bellatrix", "Craven", "Morven", "Thessiane", "Dorian",
+    "Evander", "Lysander", "Callyx", "Severin", "Malachy",
 ]
 
 COVEN_NAMES = [
@@ -61,6 +62,19 @@ COVEN_NAMES = [
     {"name": "Covenant of Eternal Night", "domain": "the Shadow Reaches"},
 ]
 
+POWER_TIERS = [
+    (1, 25, "Fledgling"),
+    (26, 50, "Turned"),
+    (51, 75, "Ancient"),
+    (76, 100, "Elder"),
+]
+
+def get_power_tier(power):
+    for low, high, label in POWER_TIERS:
+        if low <= power <= high:
+            return label
+    return "Unknown"
+
 def is_admin(message):
     return isinstance(message.author, discord.Member) and message.author.guild_permissions.administrator
 
@@ -74,15 +88,36 @@ def generate_code():
             return code
 
 def make_member(name):
+    power = random.randint(1, 100)
     return {
-        "name": name, "alive": True, "kills": 0, "deaths": 0,
-        "times_imprisoned": 0, "missions_survived": 0,
-        "imprisoned_until": None, "imprisonment_sentence": None,
+        "name": name,
+        "alive": True,
+        "power": power,
+        "kills": 0,
+        "deaths": 0,
+        "times_imprisoned": 0,
+        "missions_survived": 0,
+        "imprisoned_until": None,
+        "imprisonment_sentence": None,
     }
 
 def generate_vampires(count=5):
     names = random.sample(VAMPIRE_NAMES, min(count, len(VAMPIRE_NAMES)))
     return [make_member(n) for n in names]
+
+def get_alive_members(coven):
+    return [m for m in coven['members'] if m['alive']]
+
+def get_elder(coven):
+    alive = get_alive_members(coven)
+    if not alive:
+        return None
+    return max(alive, key=lambda m: m['power'])
+
+def update_elder(coven):
+    top = get_elder(coven)
+    if top:
+        coven['elder'] = top['name']
 
 async def safe_send(channel, embed=None, content=None):
     try:
@@ -108,29 +143,36 @@ async def handle_coven(message, args):
     chosen = random.choice(COVEN_NAMES)
     code = generate_code()
     members = generate_vampires(random.randint(4, 7))
-    power = random.randint(10, 100)
+    elder = max(members, key=lambda m: m['power'])
 
     covens[code] = {
-        "name": chosen["name"], "domain": chosen["domain"],
-        "elder": members[0]['name'], "power": power,
-        "owner_id": user_id, "owner_name": message.author.name,
-        "code": code, "alive": True,
-        "raids_won": 0, "raids_lost": 0,
-        "members": members, "blood_debts": [],
+        "name": chosen["name"],
+        "domain": chosen["domain"],
+        "elder": elder['name'],
+        "owner_id": user_id,
+        "owner_name": message.author.name,
+        "code": code,
+        "alive": True,
+        "raids_won": 0,
+        "raids_lost": 0,
+        "members": members,
+        "blood_debts": [],
     }
 
     if not is_admin(message):
         active_coven_owners.add(user_id)
 
-    member_lines = "\n".join(f"`{m['name']}`" for m in members)
+    member_lines = "\n".join(
+        f"`{m['name']}` — Power: {m['power']} ({get_power_tier(m['power'])})"
+        for m in members
+    )
 
     embed = discord.Embed(
         title="You Have Been Bound",
         description=(
             f"You now lead **{chosen['name']}**.\n\n"
             f"Domain: {chosen['domain']}\n"
-            f"Elder: `{members[0]['name']}`\n"
-            f"Power: {power}\n"
+            f"Elder: `{elder['name']}` — Power: {elder['power']} ({get_power_tier(elder['power'])})\n"
             f"Members: {len(members)}\n"
             f"Code: `{code}`\n\n"
             f"{member_lines}"
