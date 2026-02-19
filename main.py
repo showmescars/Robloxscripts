@@ -164,7 +164,7 @@ async def safe_send(channel, embed=None, content=None):
 async def handle_coven(message, args):
     user_id = message.author.id
     if not is_admin(message) and user_has_active_coven(user_id):
-        await safe_send(message.channel, content="You already lead a coven. Type `show` to see it.")
+        await safe_send(message.channel, content="You already lead a coven. Type `view` to see it.")
         return
 
     chosen = random.choice(COVEN_NAMES)
@@ -206,7 +206,7 @@ async def handle_coven(message, args):
         ),
         color=discord.Color.dark_red()
     )
-    embed.set_footer(text="coven | hunt <code> <number> | show")
+    embed.set_footer(text="coven | hunt <code> <number> | view")
     await safe_send(message.channel, embed=embed)
 
 # --- hunt command ---
@@ -277,19 +277,21 @@ async def handle_hunt(message, args):
             m['missions_survived'] += 1
             total_kills += 1
             power_gain = random.randint(1, 10)
+            old_power = m['power']
             m['power'] = min(100, m['power'] + power_gain)
             result_lines.append(random.choice([
-                f"`{m['name']}` — hunted `{enemy_name}` down. Power: {m['power'] - power_gain} -> {m['power']} (+{power_gain})",
-                f"`{m['name']}` — the target never stood a chance. Power: {m['power'] - power_gain} -> {m['power']} (+{power_gain})",
-                f"`{m['name']}` — moved through the dark and did not miss. Power: {m['power'] - power_gain} -> {m['power']} (+{power_gain})",
+                f"`{m['name']}` — hunted `{enemy_name}` down. Power: {old_power} -> {m['power']} (+{power_gain})",
+                f"`{m['name']}` — the target never stood a chance. Power: {old_power} -> {m['power']} (+{power_gain})",
+                f"`{m['name']}` — moved through the dark and did not miss. Power: {old_power} -> {m['power']} (+{power_gain})",
             ]))
         elif roll <= win_chance + 25:
             m['missions_survived'] += 1
             power_loss = random.randint(1, 8)
+            old_power = m['power']
             m['power'] = max(1, m['power'] - power_loss)
             result_lines.append(random.choice([
-                f"`{m['name']}` — took damage but returned. Power: {m['power'] + power_loss} -> {m['power']} (-{power_loss})",
-                f"`{m['name']}` — escaped with wounds. Power: {m['power'] + power_loss} -> {m['power']} (-{power_loss})",
+                f"`{m['name']}` — took damage but returned. Power: {old_power} -> {m['power']} (-{power_loss})",
+                f"`{m['name']}` — escaped with wounds. Power: {old_power} -> {m['power']} (-{power_loss})",
             ]))
         else:
             if len(get_alive_members(coven)) > 1:
@@ -303,15 +305,15 @@ async def handle_hunt(message, args):
                 ]))
             else:
                 power_loss = random.randint(5, 15)
+                old_power = m['power']
                 m['power'] = max(1, m['power'] - power_loss)
-                result_lines.append(f"`{m['name']}` — barely survived. Power: {m['power'] + power_loss} -> {m['power']} (-{power_loss})")
+                result_lines.append(f"`{m['name']}` — barely survived. Power: {old_power} -> {m['power']} (-{power_loss})")
 
     update_elder(coven)
     check_and_mark_dead(code)
 
     crew_text = "\n".join(result_lines) if result_lines else "Nothing to report."
     alive_after = get_alive_members(coven)
-    new_elder = coven['elder']
 
     result_embed = discord.Embed(
         title="Hunt Over" if not fallen else "Hunt Over — Blood Spilled",
@@ -320,7 +322,7 @@ async def handle_hunt(message, args):
 
     desc = f"**Kills this hunt:** {total_kills}\n"
     desc += f"**Standing:** {len(alive_after)} alive\n"
-    desc += f"**Elder:** `{new_elder}`\n"
+    desc += f"**Elder:** `{coven['elder']}`\n"
 
     if fallen:
         desc += "\n**Destroyed:** " + ", ".join(f"`{n}`" for n in fallen)
@@ -351,9 +353,9 @@ async def handle_hunt(message, args):
     if not coven['alive']:
         await safe_send(message.channel, content=f"**{coven['name']}** has been destroyed. Type `coven` to begin again.")
 
-# --- show command ---
+# --- view command ---
 
-async def handle_show(message, args):
+async def handle_view(message, args):
     user_id = message.author.id
 
     if args:
@@ -380,15 +382,13 @@ async def handle_show(message, args):
 
     for c in alive_covens:
         update_elder(c)
-        hw = c.get('hunts_won', 0)
-        hl = c.get('hunts_lost', 0)
         alive = get_alive_members(c)
         dead = get_dead_members(c)
 
         desc = (
             f"Domain: {c.get('domain', 'Unknown')}\n"
             f"Elder: `{c.get('elder', 'Unknown')}`\n"
-            f"Kills: {get_coven_kills(c)}   Deaths: {get_coven_deaths(c)}\n"
+            f"Total Kills: {get_coven_kills(c)}   Total Deaths: {get_coven_deaths(c)}\n"
             f"Standing: {len(alive)} alive\n"
         )
 
@@ -404,12 +404,12 @@ async def handle_show(message, args):
             description=desc,
             color=discord.Color.dark_red()
         )
-        embed.set_footer(text="coven | hunt <code> <number> | show")
+        embed.set_footer(text="coven | hunt <code> <number> | view")
         await safe_send(message.channel, embed=embed)
 
         if dead:
             dead_lines = "\n".join(
-                f"`{m['name']}` | Power: {m['power']} | {m['kills']} kills | Destroyed"
+                f"`{m['name']}` | Power: {m['power']} ({get_power_tier(m['power'])}) | {m['kills']} kills | Destroyed"
                 for m in dead
             )
             fallen_embed = discord.Embed(
@@ -425,7 +425,7 @@ async def handle_show(message, args):
 COMMANDS = {
     "coven": handle_coven,
     "hunt": handle_hunt,
-    "show": handle_show,
+    "view": handle_view,
 }
 
 @bot.event
