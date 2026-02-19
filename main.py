@@ -443,14 +443,6 @@ async def handle_hunt(message, args):
                 inline=False
             )
 
-    if not coven_wiped:
-        kills_field = "\n".join(
-            f"`{m['name']}` — {m['kills']} kill{'s' if m['kills'] != 1 else ''} | Power: {m['power']} ({get_power_tier(m['power'])})"
-            for m in coven['members']
-        )
-        if len(kills_field) <= EMBED_FIELD_LIMIT:
-            result_embed.add_field(name="Coven Stats", value=kills_field, inline=False)
-
     result_embed.set_footer(
         text="The coven is gone. Type `coven` to begin again." if coven_wiped else
         ("Some did not return." if fallen else "The coven endures.")
