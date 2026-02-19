@@ -62,12 +62,24 @@ COVEN_NAMES = [
     {"name": "Covenant of Eternal Night", "domain": "the Shadow Reaches"},
 ]
 
+ENEMY_VAMPIRE_NAMES = [
+    "Malgrath", "Syndra", "Vorlen", "Thessiva", "Carnax", "Belara", "Drevus",
+    "Isoleth", "Raxon", "Calindra", "Morvex", "Selenith", "Vrakon", "Caelith",
+    "Syndros", "Velthar", "Noxara", "Drevian", "Sylveth", "Corveth",
+    "Maldris", "Vaelith", "Thessorn", "Noxian", "Caeldris", "Marveth",
+    "Isolorn", "Drexan", "Corvian", "Sylvorn",
+]
+
 POWER_TIERS = [
     (1, 25, "Fledgling"),
     (26, 50, "Turned"),
     (51, 75, "Ancient"),
     (76, 100, "Elder"),
 ]
+
+MSG_DELAY = 2.1
+EMBED_DESC_LIMIT = 4000
+EMBED_FIELD_LIMIT = 1024
 
 def get_power_tier(power):
     for low, high, label in POWER_TIERS:
@@ -95,10 +107,7 @@ def make_member(name):
         "power": power,
         "kills": 0,
         "deaths": 0,
-        "times_imprisoned": 0,
         "missions_survived": 0,
-        "imprisoned_until": None,
-        "imprisonment_sentence": None,
     }
 
 def generate_vampires(count=5):
@@ -108,20 +117,36 @@ def generate_vampires(count=5):
 def get_alive_members(coven):
     return [m for m in coven['members'] if m['alive']]
 
-def get_elder(coven):
-    alive = get_alive_members(coven)
-    if not alive:
-        return None
-    return max(alive, key=lambda m: m['power'])
+def get_dead_members(coven):
+    return [m for m in coven['members'] if not m['alive']]
 
 def update_elder(coven):
-    top = get_elder(coven)
-    if top:
-        coven['elder'] = top['name']
+    alive = get_alive_members(coven)
+    if not alive:
+        return
+    top = max(alive, key=lambda m: m['power'])
+    coven['elder'] = top['name']
+
+def check_and_mark_dead(code):
+    coven = covens.get(code)
+    if not coven:
+        return
+    if not get_alive_members(coven):
+        coven['alive'] = False
+        if not user_has_active_coven(coven['owner_id']):
+            active_coven_owners.discard(coven['owner_id'])
+
+def get_coven_kills(coven):
+    return sum(m['kills'] for m in coven['members'])
+
+def get_coven_deaths(coven):
+    return sum(m['deaths'] for m in coven['members'])
 
 async def safe_send(channel, embed=None, content=None):
     try:
         if embed:
+            if embed.description and len(embed.description) > EMBED_DESC_LIMIT:
+                embed.description = embed.description[:EMBED_DESC_LIMIT - 3] + "..."
             await channel.send(embed=embed)
         elif content:
             if len(content) > 2000:
@@ -133,6 +158,8 @@ async def safe_send(channel, embed=None, content=None):
                 await channel.send(content)
     except discord.HTTPException as e:
         print(f"safe_send error: {e}")
+
+# --- coven command ---
 
 async def handle_coven(message, args):
     user_id = message.author.id
@@ -153,8 +180,8 @@ async def handle_coven(message, args):
         "owner_name": message.author.name,
         "code": code,
         "alive": True,
-        "raids_won": 0,
-        "raids_lost": 0,
+        "hunts_won": 0,
+        "hunts_lost": 0,
         "members": members,
         "blood_debts": [],
     }
@@ -179,11 +206,226 @@ async def handle_coven(message, args):
         ),
         color=discord.Color.dark_red()
     )
-    embed.set_footer(text="More commands coming.")
+    embed.set_footer(text="coven | hunt <code> <number> | show")
     await safe_send(message.channel, embed=embed)
+
+# --- hunt command ---
+
+async def handle_hunt(message, args):
+    if len(args) < 2:
+        await safe_send(message.channel, content="Usage: `hunt <code> <number>`")
+        return
+
+    code = args[0].upper()
+    coven = covens.get(code)
+
+    if not coven:
+        await safe_send(message.channel, content=f"No coven found with code `{code}`.")
+        return
+    if coven['owner_id'] != message.author.id:
+        await safe_send(message.channel, content="That is not your coven.")
+        return
+    if not coven['alive']:
+        await safe_send(message.channel, content=f"**{coven['name']}** has been destroyed.")
+        return
+
+    try:
+        requested = int(args[1])
+    except ValueError:
+        await safe_send(message.channel, content="Needs to be a number. Example: `hunt XKRV 3`")
+        return
+
+    if requested < 1:
+        await safe_send(message.channel, content="Send at least 1.")
+        return
+
+    alive = get_alive_members(coven)
+    if not alive:
+        await safe_send(message.channel, content="No members left to send.")
+        return
+
+    actual = min(requested, len(alive), 10)
+    hunting = random.sample(alive, actual)
+
+    enemy_name = random.choice(ENEMY_VAMPIRE_NAMES)
+    enemy_power = random.randint(1, 100)
+    enemy_tier = get_power_tier(enemy_power)
+
+    hunting_names = ", ".join(f"`{m['name']}`" for m in hunting)
+
+    intro = discord.Embed(title="The Hunt Begins", color=discord.Color.dark_red())
+    intro.description = (
+        f"**{coven['name']}** moves into the dark.\n\n"
+        f"Hunting: {hunting_names}\n\n"
+        f"Target: `{enemy_name}` — Power: {enemy_power} ({enemy_tier})"
+    )
+    intro.set_footer(text="The night belongs to them.")
+    await safe_send(message.channel, embed=intro)
+    await asyncio.sleep(MSG_DELAY)
+
+    result_lines = []
+    fallen = []
+    total_kills = 0
+
+    for m in hunting:
+        power_diff = m['power'] - enemy_power
+        win_chance = max(15, min(85, 50 + int((power_diff / 100) * 35)))
+        roll = random.randint(1, 100)
+
+        if roll <= win_chance:
+            m['kills'] += 1
+            m['missions_survived'] += 1
+            total_kills += 1
+            power_gain = random.randint(1, 10)
+            m['power'] = min(100, m['power'] + power_gain)
+            result_lines.append(random.choice([
+                f"`{m['name']}` — hunted `{enemy_name}` down. Power: {m['power'] - power_gain} -> {m['power']} (+{power_gain})",
+                f"`{m['name']}` — the target never stood a chance. Power: {m['power'] - power_gain} -> {m['power']} (+{power_gain})",
+                f"`{m['name']}` — moved through the dark and did not miss. Power: {m['power'] - power_gain} -> {m['power']} (+{power_gain})",
+            ]))
+        elif roll <= win_chance + 25:
+            m['missions_survived'] += 1
+            power_loss = random.randint(1, 8)
+            m['power'] = max(1, m['power'] - power_loss)
+            result_lines.append(random.choice([
+                f"`{m['name']}` — took damage but returned. Power: {m['power'] + power_loss} -> {m['power']} (-{power_loss})",
+                f"`{m['name']}` — escaped with wounds. Power: {m['power'] + power_loss} -> {m['power']} (-{power_loss})",
+            ]))
+        else:
+            if len(get_alive_members(coven)) > 1:
+                m['alive'] = False
+                m['deaths'] += 1
+                fallen.append(m['name'])
+                result_lines.append(random.choice([
+                    f"`{m['name']}` — was destroyed by `{enemy_name}`. They do not return.",
+                    f"`{m['name']}` — fell. The enemy was stronger.",
+                    f"`{m['name']}` — met their end in the dark.",
+                ]))
+            else:
+                power_loss = random.randint(5, 15)
+                m['power'] = max(1, m['power'] - power_loss)
+                result_lines.append(f"`{m['name']}` — barely survived. Power: {m['power'] + power_loss} -> {m['power']} (-{power_loss})")
+
+    update_elder(coven)
+    check_and_mark_dead(code)
+
+    crew_text = "\n".join(result_lines) if result_lines else "Nothing to report."
+    alive_after = get_alive_members(coven)
+    new_elder = coven['elder']
+
+    result_embed = discord.Embed(
+        title="Hunt Over" if not fallen else "Hunt Over — Blood Spilled",
+        color=discord.Color.green() if not fallen else discord.Color.dark_red()
+    )
+
+    desc = f"**Kills this hunt:** {total_kills}\n"
+    desc += f"**Standing:** {len(alive_after)} alive\n"
+    desc += f"**Elder:** `{new_elder}`\n"
+
+    if fallen:
+        desc += "\n**Destroyed:** " + ", ".join(f"`{n}`" for n in fallen)
+
+    result_embed.description = desc
+
+    if len(crew_text) <= EMBED_FIELD_LIMIT:
+        result_embed.add_field(name="Results", value=crew_text, inline=False)
+    else:
+        chunks = [result_lines[i:i+10] for i in range(0, len(result_lines), 10)]
+        for idx, chunk in enumerate(chunks):
+            result_embed.add_field(
+                name="Results" if idx == 0 else "Results (cont.)",
+                value="\n".join(chunk),
+                inline=False
+            )
+
+    kills_field = "\n".join(
+        f"`{m['name']}` — {m['kills']} kill{'s' if m['kills'] != 1 else ''} | Power: {m['power']} ({get_power_tier(m['power'])})"
+        for m in coven['members']
+    )
+    if len(kills_field) <= EMBED_FIELD_LIMIT:
+        result_embed.add_field(name="Coven Stats", value=kills_field, inline=False)
+
+    result_embed.set_footer(text="The coven endures." if not fallen else "Some did not return.")
+    await safe_send(message.channel, embed=result_embed)
+
+    if not coven['alive']:
+        await safe_send(message.channel, content=f"**{coven['name']}** has been destroyed. Type `coven` to begin again.")
+
+# --- show command ---
+
+async def handle_show(message, args):
+    user_id = message.author.id
+
+    if args:
+        code = args[0].upper()
+        target = covens.get(code)
+        if not target:
+            await safe_send(message.channel, content=f"No coven found with code `{code}`.")
+            return
+        if target['owner_id'] != user_id and not is_admin(message):
+            await safe_send(message.channel, content="That is not your coven.")
+            return
+        user_covens = [target]
+    else:
+        user_covens = [c for c in covens.values() if c['owner_id'] == user_id]
+
+    if not user_covens:
+        await safe_send(message.channel, content="You lead no coven. Type `coven` to start one.")
+        return
+
+    alive_covens = [c for c in user_covens if c['alive']]
+    if not alive_covens:
+        await safe_send(message.channel, content="No active coven. Type `coven` to start again.")
+        return
+
+    for c in alive_covens:
+        update_elder(c)
+        hw = c.get('hunts_won', 0)
+        hl = c.get('hunts_lost', 0)
+        alive = get_alive_members(c)
+        dead = get_dead_members(c)
+
+        desc = (
+            f"Domain: {c.get('domain', 'Unknown')}\n"
+            f"Elder: `{c.get('elder', 'Unknown')}`\n"
+            f"Kills: {get_coven_kills(c)}   Deaths: {get_coven_deaths(c)}\n"
+            f"Standing: {len(alive)} alive\n"
+        )
+
+        if alive:
+            roster = "\n".join(
+                f"`{m['name']}` | Power: {m['power']} ({get_power_tier(m['power'])}) | {m['kills']} kills"
+                for m in alive
+            )
+            desc += f"\nActive Members\n{roster}"
+
+        embed = discord.Embed(
+            title=f"{c['name']} — `{c['code']}`",
+            description=desc,
+            color=discord.Color.dark_red()
+        )
+        embed.set_footer(text="coven | hunt <code> <number> | show")
+        await safe_send(message.channel, embed=embed)
+
+        if dead:
+            dead_lines = "\n".join(
+                f"`{m['name']}` | Power: {m['power']} | {m['kills']} kills | Destroyed"
+                for m in dead
+            )
+            fallen_embed = discord.Embed(
+                title=f"{c['name']} — Destroyed",
+                description=dead_lines,
+                color=discord.Color.dark_grey()
+            )
+            fallen_embed.set_footer(text="They do not return.")
+            await safe_send(message.channel, embed=fallen_embed)
+
+# --- Router ---
 
 COMMANDS = {
     "coven": handle_coven,
+    "hunt": handle_hunt,
+    "show": handle_show,
 }
 
 @bot.event
