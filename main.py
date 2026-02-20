@@ -1,7 +1,6 @@
 import discord
 from dotenv import load_dotenv
 import os
-import asyncio
 import time
 from keep_alive import keep_alive
 
@@ -12,8 +11,10 @@ intents.message_content = True
 bot = discord.Client(intents=intents)
 
 keys = []
-user_claims = {}        # user_id: {"count": int, "cooldown_until": float}
-allowed_channel = None  # channel id that bot listens to
+used_keys = set()        # all keys ever added, to prevent duplicates
+user_claims = {}         # user_id: {"count": int, "cooldown_until": float}
+claim_log = []           # list of dicts: {user_id, display_name, key, timestamp}
+allowed_channel = None
 
 def is_admin(message):
     return isinstance(message.author, discord.Member) and message.author.guild_permissions.administrator
@@ -23,20 +24,19 @@ def get_user_data(user_id):
         user_claims[user_id] = {"count": 0, "cooldown_until": 0}
     return user_claims[user_id]
 
+def format_time(ts):
+    import datetime
+    return datetime.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S UTC')
+
 # --- set ---
 
 async def handle_set(message):
     global allowed_channel
-
-    if not is_admin(message):
-        await message.channel.send("You don't have permission to use this command.")
-        return
-
     allowed_channel = message.channel.id
 
     embed = discord.Embed(
         title="Channel Set",
-        description=f"This channel is now the designated key channel.\nAll bot commands will only work here.",
+        description="This channel is now the designated key channel.\nAll bot commands will only work here.",
         color=discord.Color.green()
     )
     embed.set_footer(text="Use 'set' in any channel to move it.")
@@ -54,28 +54,36 @@ async def handle_stock(message):
         return
 
     attachment = message.attachments[0]
-
     if not attachment.filename.endswith('.txt'):
         await message.channel.send("Only `.txt` files are accepted.")
         return
 
     content = await attachment.read()
     lines = content.decode('utf-8').splitlines()
-    new_keys = [line.strip() for line in lines if line.strip()]
+    raw_keys = [line.strip() for line in lines if line.strip()]
 
-    if not new_keys:
-        await message.channel.send("The file was empty or had no valid keys.")
-        return
+    added = []
+    skipped = 0
+    for k in raw_keys:
+        if k in used_keys:
+            skipped += 1
+        else:
+            added.append(k)
+            used_keys.add(k)
 
     keys.clear()
-    keys.extend(new_keys)
+    keys.extend(added)
 
     embed = discord.Embed(
         title="Stock Loaded",
-        description=f"**{len(keys)}** keys loaded successfully.\nPrevious stock was replaced.",
         color=discord.Color.green()
     )
-    embed.set_footer(text="Use 'refill' to add more keys on top of existing stock.")
+    embed.description = (
+        f"**{len(added)}** new keys loaded.\n"
+        f"**{skipped}** duplicate(s) skipped.\n"
+        f"Previous stock replaced with new unique keys only."
+    )
+    embed.set_footer(text="Use 'refill' to add more keys on top.")
     await message.channel.send(embed=embed)
 
 # --- refill ---
@@ -90,25 +98,32 @@ async def handle_refill(message):
         return
 
     attachment = message.attachments[0]
-
     if not attachment.filename.endswith('.txt'):
         await message.channel.send("Only `.txt` files are accepted.")
         return
 
     content = await attachment.read()
     lines = content.decode('utf-8').splitlines()
-    new_keys = [line.strip() for line in lines if line.strip()]
+    raw_keys = [line.strip() for line in lines if line.strip()]
 
-    if not new_keys:
-        await message.channel.send("The file was empty or had no valid keys.")
-        return
-
-    keys.extend(new_keys)
+    added = []
+    skipped = 0
+    for k in raw_keys:
+        if k in used_keys:
+            skipped += 1
+        else:
+            added.append(k)
+            used_keys.add(k)
+            keys.append(k)
 
     embed = discord.Embed(
         title="Stock Refilled",
-        description=f"**{len(new_keys)}** keys added.\n**{len(keys)}** total keys now in stock.",
         color=discord.Color.blurple()
+    )
+    embed.description = (
+        f"**{len(added)}** new keys added.\n"
+        f"**{skipped}** duplicate(s) skipped.\n"
+        f"**{len(keys)}** total keys now in stock."
     )
     embed.set_footer(text="Use 'stock' to replace all stock with a new file.")
     await message.channel.send(embed=embed)
@@ -128,6 +143,14 @@ async def handle_key(message):
 
         key = keys.pop(0)
 
+        claim_log.append({
+            "display_name": message.author.display_name,
+            "user_id": message.author.id,
+            "key": key,
+            "timestamp": time.time(),
+            "admin": True,
+        })
+
         try:
             embed = discord.Embed(
                 title="Your Key",
@@ -146,6 +169,7 @@ async def handle_key(message):
 
         except discord.Forbidden:
             keys.insert(0, key)
+            claim_log.pop()
             await message.channel.send("I couldn't DM you. Please enable DMs from server members and try again.")
         return
 
@@ -154,7 +178,6 @@ async def handle_key(message):
     data = get_user_data(user_id)
     now = time.time()
 
-    # check cooldown
     if data["cooldown_until"] > now:
         remaining = int(data["cooldown_until"] - now)
         mins = remaining // 60
@@ -164,20 +187,14 @@ async def handle_key(message):
         )
         return
 
-    # reset count if cooldown has passed and they were on one
     if data["cooldown_until"] != 0 and data["cooldown_until"] <= now:
         data["count"] = 0
         data["cooldown_until"] = 0
 
     if data["count"] >= 2:
-        # shouldn't normally hit this but safety net
         data["cooldown_until"] = now + 3600
         data["count"] = 0
-        remaining = 3600
-        mins = remaining // 60
-        await message.channel.send(
-            f"You've reached your limit. Try again in **{mins}m**."
-        )
+        await message.channel.send("You've reached your limit. Try again in **60m**.")
         return
 
     if not keys:
@@ -187,9 +204,16 @@ async def handle_key(message):
     key = keys.pop(0)
     data["count"] += 1
 
-    # if they've now hit 2, start the cooldown
     if data["count"] >= 2:
         data["cooldown_until"] = now + 3600
+
+    claim_log.append({
+        "display_name": message.author.display_name,
+        "user_id": message.author.id,
+        "key": key,
+        "timestamp": time.time(),
+        "admin": False,
+    })
 
     try:
         embed = discord.Embed(
@@ -219,10 +243,45 @@ async def handle_key(message):
 
     except discord.Forbidden:
         keys.insert(0, key)
+        claim_log.pop()
         data["count"] -= 1
         if data["count"] < 2:
             data["cooldown_until"] = 0
         await message.channel.send("I couldn't DM you. Please enable DMs from server members and try again.")
+
+# --- log ---
+
+async def handle_log(message):
+    if not is_admin(message):
+        await message.channel.send("You don't have permission to use this command.")
+        return
+
+    if not claim_log:
+        await message.channel.send("No keys have been claimed yet.")
+        return
+
+    # build log pages, 10 entries per embed
+    entries_per_page = 10
+    pages = [claim_log[i:i+entries_per_page] for i in range(0, len(claim_log), entries_per_page)]
+
+    for idx, page in enumerate(pages):
+        lines = []
+        for entry in page:
+            admin_tag = " *(admin)*" if entry.get("admin") else ""
+            lines.append(
+                f"**{entry['display_name']}**{admin_tag}\n"
+                f"ID: `{entry['user_id']}`\n"
+                f"Key: `{entry['key']}`\n"
+                f"Time: {format_time(entry['timestamp'])}\n"
+            )
+
+        embed = discord.Embed(
+            title=f"Key Claim Log ({idx + 1}/{len(pages)})",
+            description="\n".join(lines),
+            color=discord.Color.dark_gold()
+        )
+        embed.set_footer(text=f"Total claims: {len(claim_log)} | Keys remaining: {len(keys)}")
+        await message.channel.send(embed=embed)
 
 # --- router ---
 
@@ -231,6 +290,7 @@ COMMANDS = {
     "stock": handle_stock,
     "refill": handle_refill,
     "key": handle_key,
+    "log": handle_log,
 }
 
 @bot.event
@@ -246,7 +306,6 @@ async def on_message(message):
 
     content = message.content.strip().lower()
 
-    # set cmd works in any channel so admin can move it
     if content == "set":
         if is_admin(message):
             await handle_set(message)
@@ -254,7 +313,6 @@ async def on_message(message):
             await message.channel.send("You don't have permission to use this command.")
         return
 
-    # all other cmds only work in the set channel
     if allowed_channel is None:
         if is_admin(message) and content in COMMANDS:
             await message.channel.send("No channel set yet. Type `set` in the channel you want the bot to use.")
