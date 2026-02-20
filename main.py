@@ -2,6 +2,7 @@ import discord
 from dotenv import load_dotenv
 import os
 import time
+import random
 from keep_alive import keep_alive
 
 load_dotenv()
@@ -140,7 +141,8 @@ async def handle_key(message):
             await message.channel.send("No keys are in stock right now.")
             return
 
-        key = keys.pop(0)
+        key = random.choice(keys)
+        keys.remove(key)
 
         claim_log.append({
             "display_name": message.author.display_name,
@@ -167,7 +169,7 @@ async def handle_key(message):
             await message.channel.send(embed=confirm)
 
         except discord.Forbidden:
-            keys.insert(0, key)
+            keys.append(key)
             claim_log.pop()
             await message.channel.send("I couldn't DM you. Please enable DMs from server members and try again.")
         return
@@ -189,7 +191,7 @@ async def handle_key(message):
         data["count"] = 0
         data["cooldown_until"] = 0
 
-    if data["count"] >= 2:
+    if data["count"] >= 3:
         data["cooldown_until"] = now + 3600
         data["count"] = 0
         await message.channel.send("You've reached your limit. Try again in **60m**.")
@@ -199,10 +201,11 @@ async def handle_key(message):
         await message.channel.send("No keys are in stock right now. Check back later.")
         return
 
-    key = keys.pop(0)
+    key = random.choice(keys)
+    keys.remove(key)
     data["count"] += 1
 
-    if data["count"] >= 2:
+    if data["count"] >= 3:
         data["cooldown_until"] = now + 3600
 
     claim_log.append({
@@ -219,11 +222,11 @@ async def handle_key(message):
             description=f"`{key}`",
             color=discord.Color.dark_red()
         )
-        claims_left = 2 - data["count"]
+        claims_left = 3 - data["count"]
         if claims_left > 0:
             footer = f"You have {claims_left} claim remaining before cooldown."
         else:
-            footer = "You've used both claims. Come back in 1 hour."
+            footer = "You've used all 3 claims. Come back in 1 hour."
         embed.set_footer(text=footer)
         await message.author.send(embed=embed)
 
@@ -232,18 +235,18 @@ async def handle_key(message):
             description="Your key has been sent to your DMs.",
             color=discord.Color.green()
         )
-        claims_left = 2 - data["count"]
+        claims_left = 3 - data["count"]
         if claims_left > 0:
             confirm.set_footer(text=f"{claims_left} claim remaining before cooldown.")
         else:
-            confirm.set_footer(text="You've used both claims. Cooldown started — 1 hour.")
+            confirm.set_footer(text="You've used all 3 claims. Cooldown started — 1 hour.")
         await message.channel.send(embed=confirm)
 
     except discord.Forbidden:
-        keys.insert(0, key)
+        keys.append(key)
         claim_log.pop()
         data["count"] -= 1
-        if data["count"] < 2:
+        if data["count"] < 3:
             data["cooldown_until"] = 0
         await message.channel.send("I couldn't DM you. Please enable DMs from server members and try again.")
 
@@ -343,7 +346,6 @@ async def on_message(message):
     if content not in COMMANDS:
         return
 
-    # set works anywhere for admins
     if content == "set":
         if is_admin(message):
             await handle_set(message)
@@ -351,13 +353,11 @@ async def on_message(message):
             await message.channel.send("You don't have permission to use this command.")
         return
 
-    # if no channel set yet, only admins get a hint
     if allowed_channel is None:
         if is_admin(message):
             await message.channel.send("No channel set yet. Type `set` in the channel you want the bot to use.")
         return
 
-    # admins can use any cmd from any channel once a channel is set
     if is_admin(message):
         try:
             await COMMANDS[content](message)
@@ -372,7 +372,6 @@ async def on_message(message):
                 pass
         return
 
-    # regular users are restricted to the set channel only
     if message.channel.id != allowed_channel:
         return
 
