@@ -224,7 +224,7 @@ async def handle_key(message):
         )
         claims_left = 3 - data["count"]
         if claims_left > 0:
-            footer = f"You have {claims_left} claim remaining before cooldown."
+            footer = f"You have {claims_left} claims remaining before cooldown."
         else:
             footer = "You've used all 3 claims. Come back in 1 hour."
         embed.set_footer(text=footer)
