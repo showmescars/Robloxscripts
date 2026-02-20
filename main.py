@@ -80,7 +80,7 @@ async def handle_stock(message):
     )
     embed.description = (
         f"**{len(added)}** new keys loaded.\n"
-        f"**{skipped}** duplicate(s) skipped.\n"
+        f"**{skipped}** duplicate skipped.\n"
         f"Previous stock replaced with new unique keys only."
     )
     embed.set_footer(text="Use 'refill' to add more keys on top.")
@@ -122,7 +122,7 @@ async def handle_refill(message):
     )
     embed.description = (
         f"**{len(added)}** new keys added.\n"
-        f"**{skipped}** duplicate(s) skipped.\n"
+        f"**{skipped}** duplicate skipped.\n"
         f"**{len(keys)}** total keys now in stock."
     )
     embed.set_footer(text="Use 'stock' to replace all stock with a new file.")
@@ -221,7 +221,7 @@ async def handle_key(message):
         )
         claims_left = 2 - data["count"]
         if claims_left > 0:
-            footer = f"You have {claims_left} claim(s) remaining before cooldown."
+            footer = f"You have {claims_left} claim remaining before cooldown."
         else:
             footer = "You've used both claims. Come back in 1 hour."
         embed.set_footer(text=footer)
@@ -234,7 +234,7 @@ async def handle_key(message):
         )
         claims_left = 2 - data["count"]
         if claims_left > 0:
-            confirm.set_footer(text=f"{claims_left} claim(s) remaining before cooldown.")
+            confirm.set_footer(text=f"{claims_left} claim remaining before cooldown.")
         else:
             confirm.set_footer(text="You've used both claims. Cooldown started — 1 hour.")
         await message.channel.send(embed=confirm)
@@ -340,6 +340,10 @@ async def on_message(message):
 
     content = message.content.strip().lower()
 
+    if content not in COMMANDS:
+        return
+
+    # set works anywhere for admins
     if content == "set":
         if is_admin(message):
             await handle_set(message)
@@ -347,15 +351,14 @@ async def on_message(message):
             await message.channel.send("You don't have permission to use this command.")
         return
 
+    # if no channel set yet, only admins get a hint
     if allowed_channel is None:
-        if is_admin(message) and content in COMMANDS:
+        if is_admin(message):
             await message.channel.send("No channel set yet. Type `set` in the channel you want the bot to use.")
         return
 
-    if message.channel.id != allowed_channel:
-        return
-
-    if content in COMMANDS:
+    # admins can use any cmd from any channel once a channel is set
+    if is_admin(message):
         try:
             await COMMANDS[content](message)
         except discord.HTTPException as e:
@@ -367,6 +370,23 @@ async def on_message(message):
                 await message.channel.send("An error occurred. Check the logs.")
             except:
                 pass
+        return
+
+    # regular users are restricted to the set channel only
+    if message.channel.id != allowed_channel:
+        return
+
+    try:
+        await COMMANDS[content](message)
+    except discord.HTTPException as e:
+        print(f"HTTP error: {e}")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            await message.channel.send("An error occurred. Check the logs.")
+        except:
+            pass
 
 if __name__ == "__main__":
     TOKEN = os.getenv('DISCORD_TOKEN')
