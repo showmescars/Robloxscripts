@@ -43,6 +43,99 @@ async def handle_set(message):
     embed.set_footer(text="Use 'set' in any channel to move it.")
     await message.channel.send(embed=embed)
 
+# --- setcool ---
+
+async def handle_setcool(message, args):
+    if not is_admin(message):
+        await message.channel.send("You don't have permission to use this command.")
+        return
+
+    if len(args) < 2:
+        embed = discord.Embed(
+            title="Invalid Usage",
+            description=(
+                "Usage: `setcool <user_id> <duration>`\n\n"
+                "Duration examples:\n"
+                "`30m` — 30 minutes\n"
+                "`2h` — 2 hours\n"
+                "`1d` — 1 day\n"
+                "`0` — remove cooldown entirely"
+            ),
+            color=discord.Color.red()
+        )
+        await message.channel.send(embed=embed)
+        return
+
+    raw_id = args[0]
+    raw_duration = args[1].lower()
+
+    try:
+        user_id = int(raw_id)
+    except ValueError:
+        await message.channel.send("That doesn't look like a valid user ID.")
+        return
+
+    # parse duration
+    if raw_duration == "0":
+        seconds = 0
+    elif raw_duration.endswith("m"):
+        try:
+            seconds = int(raw_duration[:-1]) * 60
+        except ValueError:
+            await message.channel.send("Invalid duration. Example: `30m`, `2h`, `1d`, or `0`.")
+            return
+    elif raw_duration.endswith("h"):
+        try:
+            seconds = int(raw_duration[:-1]) * 3600
+        except ValueError:
+            await message.channel.send("Invalid duration. Example: `30m`, `2h`, `1d`, or `0`.")
+            return
+    elif raw_duration.endswith("d"):
+        try:
+            seconds = int(raw_duration[:-1]) * 86400
+        except ValueError:
+            await message.channel.send("Invalid duration. Example: `30m`, `2h`, `1d`, or `0`.")
+            return
+    else:
+        await message.channel.send("Invalid duration. Example: `30m`, `2h`, `1d`, or `0`.")
+        return
+
+    data = get_user_data(user_id)
+    now = time.time()
+
+    if seconds == 0:
+        data["cooldown_until"] = 0
+        data["count"] = 0
+
+        embed = discord.Embed(
+            title="Cooldown Removed",
+            description=f"Cooldown cleared for <@{user_id}>.\nTheir claim count has been reset.",
+            color=discord.Color.green()
+        )
+        await message.channel.send(embed=embed)
+    else:
+        data["cooldown_until"] = now + seconds
+        data["count"] = 3
+
+        # format a readable duration
+        if seconds < 3600:
+            readable = f"{seconds // 60} minute" + ("s" if seconds // 60 != 1 else "")
+        elif seconds < 86400:
+            readable = f"{seconds // 3600} hour" + ("s" if seconds // 3600 != 1 else "")
+        else:
+            readable = f"{seconds // 86400} day" + ("s" if seconds // 86400 != 1 else "")
+
+        embed = discord.Embed(
+            title="Cooldown Set",
+            description=(
+                f"Cooldown applied to <@{user_id}>.\n"
+                f"Duration: **{readable}**\n"
+                f"Expires: {format_time(data['cooldown_until'])}"
+            ),
+            color=discord.Color.orange()
+        )
+        await message.channel.send(embed=embed)
+
 # --- stock ---
 
 async def handle_stock(message):
@@ -237,7 +330,7 @@ async def handle_key(message):
         )
         claims_left = 3 - data["count"]
         if claims_left > 0:
-            confirm.set_footer(text=f"{claims_left} claim remaining before cooldown.")
+            confirm.set_footer(text=f"{claims_left} claims remaining before cooldown.")
         else:
             confirm.set_footer(text="You've used all 3 claims. Cooldown started — 1 hour.")
         await message.channel.send(embed=confirm)
@@ -341,7 +434,20 @@ async def on_message(message):
     if message.guild is None:
         return
 
-    content = message.content.strip().lower()
+    parts = message.content.strip().split()
+    if not parts:
+        return
+
+    content = parts[0].lower()
+    args = parts[1:]
+
+    # setcool handled separately since it takes args
+    if content == "setcool":
+        if is_admin(message):
+            await handle_setcool(message, args)
+        else:
+            await message.channel.send("You don't have permission to use this command.")
+        return
 
     if content not in COMMANDS:
         return
