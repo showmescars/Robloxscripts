@@ -362,6 +362,22 @@ async def handle_log(message):
         embed.set_footer(text=f"Total claims: {len(claim_log)} | Keys remaining: {len(keys)}")
         await message.channel.send(embed=embed)
 
+async def handle_clearlog(message):
+    if not is_admin(message):
+        await message.channel.send("You don't have permission to use this command.")
+        return
+
+    count = len(claim_log)
+    claim_log.clear()
+
+    embed = discord.Embed(
+        title="Log Cleared",
+        description=f"**{count}** log entries have been deleted.",
+        color=discord.Color.red()
+    )
+    embed.set_footer(text="The claim log is now empty.")
+    await message.channel.send(embed=embed)
+
 async def handle_see(message):
     if not is_admin(message):
         await message.channel.send("You don't have permission to use this command.")
@@ -401,6 +417,7 @@ COMMANDS = {
     "refill": handle_refill,
     "key": handle_key,
     "log": handle_log,
+    "clearlog": handle_clearlog,
     "see": handle_see,
 }
 
