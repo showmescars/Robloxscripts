@@ -17,6 +17,8 @@ user_claims = {}
 claim_log = []
 allowed_channel = None
 
+VIP_ROLE_ID = 1462232068762243204
+
 def is_admin(message):
     return isinstance(message.author, discord.Member) and message.author.guild_permissions.administrator
 
@@ -25,16 +27,18 @@ def get_user_data(user_id):
         user_claims[user_id] = {"count": 0, "cooldown_until": 0}
     return user_claims[user_id]
 
+def get_claim_limit(member):
+    if any(role.id == VIP_ROLE_ID for role in member.roles):
+        return 5
+    return 3
+
 def format_time(ts):
     import datetime
     return datetime.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S UTC')
 
-# --- set ---
-
 async def handle_set(message):
     global allowed_channel
     allowed_channel = message.channel.id
-
     embed = discord.Embed(
         title="Channel Set",
         description="This channel is now the designated key channel.\nAll bot commands will only work here.",
@@ -42,8 +46,6 @@ async def handle_set(message):
     )
     embed.set_footer(text="Use 'set' in any channel to move it.")
     await message.channel.send(embed=embed)
-
-# --- setcool ---
 
 async def handle_setcool(message, args):
     if not is_admin(message):
@@ -75,7 +77,6 @@ async def handle_setcool(message, args):
         await message.channel.send("That doesn't look like a valid user ID.")
         return
 
-    # parse duration
     if raw_duration == "0":
         seconds = 0
     elif raw_duration.endswith("m"):
@@ -106,7 +107,6 @@ async def handle_setcool(message, args):
     if seconds == 0:
         data["cooldown_until"] = 0
         data["count"] = 0
-
         embed = discord.Embed(
             title="Cooldown Removed",
             description=f"Cooldown cleared for <@{user_id}>.\nTheir claim count has been reset.",
@@ -117,7 +117,6 @@ async def handle_setcool(message, args):
         data["cooldown_until"] = now + seconds
         data["count"] = 3
 
-        # format a readable duration
         if seconds < 3600:
             readable = f"{seconds // 60} minute" + ("s" if seconds // 60 != 1 else "")
         elif seconds < 86400:
@@ -135,8 +134,6 @@ async def handle_setcool(message, args):
             color=discord.Color.orange()
         )
         await message.channel.send(embed=embed)
-
-# --- stock ---
 
 async def handle_stock(message):
     if not is_admin(message):
@@ -168,10 +165,7 @@ async def handle_stock(message):
     keys.clear()
     keys.extend(added)
 
-    embed = discord.Embed(
-        title="Stock Loaded",
-        color=discord.Color.green()
-    )
+    embed = discord.Embed(title="Stock Loaded", color=discord.Color.green())
     embed.description = (
         f"**{len(added)}** new keys loaded.\n"
         f"**{skipped}** duplicate skipped.\n"
@@ -179,8 +173,6 @@ async def handle_stock(message):
     )
     embed.set_footer(text="Use 'refill' to add more keys on top.")
     await message.channel.send(embed=embed)
-
-# --- refill ---
 
 async def handle_refill(message):
     if not is_admin(message):
@@ -210,10 +202,7 @@ async def handle_refill(message):
             used_keys.add(k)
             keys.append(k)
 
-    embed = discord.Embed(
-        title="Stock Refilled",
-        color=discord.Color.blurple()
-    )
+    embed = discord.Embed(title="Stock Refilled", color=discord.Color.blurple())
     embed.description = (
         f"**{len(added)}** new keys added.\n"
         f"**{skipped}** duplicate skipped.\n"
@@ -221,8 +210,6 @@ async def handle_refill(message):
     )
     embed.set_footer(text="Use 'stock' to replace all stock with a new file.")
     await message.channel.send(embed=embed)
-
-# --- key ---
 
 async def handle_key(message):
     if message.guild is None:
@@ -270,6 +257,7 @@ async def handle_key(message):
     user_id = message.author.id
     data = get_user_data(user_id)
     now = time.time()
+    limit = get_claim_limit(message.author)
 
     if data["cooldown_until"] > now:
         remaining = int(data["cooldown_until"] - now)
@@ -284,7 +272,7 @@ async def handle_key(message):
         data["count"] = 0
         data["cooldown_until"] = 0
 
-    if data["count"] >= 3:
+    if data["count"] >= limit:
         data["cooldown_until"] = now + 3600
         data["count"] = 0
         await message.channel.send("You've reached your limit. Try again in **60m**.")
@@ -298,7 +286,7 @@ async def handle_key(message):
     keys.remove(key)
     data["count"] += 1
 
-    if data["count"] >= 3:
+    if data["count"] >= limit:
         data["cooldown_until"] = now + 3600
 
     claim_log.append({
@@ -315,11 +303,11 @@ async def handle_key(message):
             description=f"`{key}`",
             color=discord.Color.dark_red()
         )
-        claims_left = 3 - data["count"]
+        claims_left = limit - data["count"]
         if claims_left > 0:
             footer = f"You have {claims_left} claims remaining before cooldown."
         else:
-            footer = "You've used all 3 claims. Come back in 1 hour."
+            footer = f"You've used all {limit} claims. Come back in 1 hour."
         embed.set_footer(text=footer)
         await message.author.send(embed=embed)
 
@@ -328,22 +316,20 @@ async def handle_key(message):
             description="Your key has been sent to your DMs.",
             color=discord.Color.green()
         )
-        claims_left = 3 - data["count"]
+        claims_left = limit - data["count"]
         if claims_left > 0:
             confirm.set_footer(text=f"{claims_left} claims remaining before cooldown.")
         else:
-            confirm.set_footer(text="You've used all 3 claims. Cooldown started — 1 hour.")
+            confirm.set_footer(text=f"You've used all {limit} claims. Cooldown started — 1 hour.")
         await message.channel.send(embed=confirm)
 
     except discord.Forbidden:
         keys.append(key)
         claim_log.pop()
         data["count"] -= 1
-        if data["count"] < 3:
+        if data["count"] < limit:
             data["cooldown_until"] = 0
         await message.channel.send("I couldn't DM you. Please enable DMs from server members and try again.")
-
-# --- log ---
 
 async def handle_log(message):
     if not is_admin(message):
@@ -376,8 +362,6 @@ async def handle_log(message):
         embed.set_footer(text=f"Total claims: {len(claim_log)} | Keys remaining: {len(keys)}")
         await message.channel.send(embed=embed)
 
-# --- see ---
-
 async def handle_see(message):
     if not is_admin(message):
         await message.channel.send("You don't have permission to use this command.")
@@ -393,7 +377,6 @@ async def handle_see(message):
 
         for idx, page in enumerate(pages):
             lines = "\n".join(f"`{k}`" for k in page)
-
             embed = discord.Embed(
                 title=f"Keys In Stock ({idx + 1}/{len(pages)})",
                 description=lines,
@@ -411,8 +394,6 @@ async def handle_see(message):
 
     except discord.Forbidden:
         await message.channel.send("I couldn't DM you. Please enable DMs from server members and try again.")
-
-# --- router ---
 
 COMMANDS = {
     "set": handle_set,
@@ -441,7 +422,6 @@ async def on_message(message):
     content = parts[0].lower()
     args = parts[1:]
 
-    # setcool handled separately since it takes args
     if content == "setcool":
         if is_admin(message):
             await handle_setcool(message, args)
