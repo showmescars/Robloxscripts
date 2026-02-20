@@ -11,9 +11,9 @@ intents.message_content = True
 bot = discord.Client(intents=intents)
 
 keys = []
-used_keys = set()        # all keys ever added, to prevent duplicates
-user_claims = {}         # user_id: {"count": int, "cooldown_until": float}
-claim_log = []           # list of dicts: {user_id, display_name, key, timestamp}
+used_keys = set()
+user_claims = {}
+claim_log = []
 allowed_channel = None
 
 def is_admin(message):
@@ -135,7 +135,6 @@ async def handle_key(message):
         await message.channel.send("This command only works in a server.")
         return
 
-    # admins bypass everything
     if is_admin(message):
         if not keys:
             await message.channel.send("No keys are in stock right now.")
@@ -173,7 +172,6 @@ async def handle_key(message):
             await message.channel.send("I couldn't DM you. Please enable DMs from server members and try again.")
         return
 
-    # normal user logic
     user_id = message.author.id
     data = get_user_data(user_id)
     now = time.time()
@@ -260,7 +258,6 @@ async def handle_log(message):
         await message.channel.send("No keys have been claimed yet.")
         return
 
-    # build log pages, 10 entries per embed
     entries_per_page = 10
     pages = [claim_log[i:i+entries_per_page] for i in range(0, len(claim_log), entries_per_page)]
 
@@ -283,6 +280,42 @@ async def handle_log(message):
         embed.set_footer(text=f"Total claims: {len(claim_log)} | Keys remaining: {len(keys)}")
         await message.channel.send(embed=embed)
 
+# --- see ---
+
+async def handle_see(message):
+    if not is_admin(message):
+        await message.channel.send("You don't have permission to use this command.")
+        return
+
+    if not keys:
+        await message.channel.send("There are no keys in stock right now.")
+        return
+
+    try:
+        entries_per_page = 20
+        pages = [keys[i:i+entries_per_page] for i in range(0, len(keys), entries_per_page)]
+
+        for idx, page in enumerate(pages):
+            lines = "\n".join(f"`{k}`" for k in page)
+
+            embed = discord.Embed(
+                title=f"Keys In Stock ({idx + 1}/{len(pages)})",
+                description=lines,
+                color=discord.Color.dark_teal()
+            )
+            embed.set_footer(text=f"Total keys remaining: {len(keys)}")
+            await message.author.send(embed=embed)
+
+        confirm = discord.Embed(
+            title="Stock List Sent",
+            description=f"All **{len(keys)}** keys in stock have been sent to your DMs.",
+            color=discord.Color.green()
+        )
+        await message.channel.send(embed=confirm)
+
+    except discord.Forbidden:
+        await message.channel.send("I couldn't DM you. Please enable DMs from server members and try again.")
+
 # --- router ---
 
 COMMANDS = {
@@ -291,6 +324,7 @@ COMMANDS = {
     "refill": handle_refill,
     "key": handle_key,
     "log": handle_log,
+    "see": handle_see,
 }
 
 @bot.event
